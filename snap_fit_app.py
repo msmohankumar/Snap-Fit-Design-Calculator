@@ -7,7 +7,6 @@ import math
 st.set_page_config(page_title="Snap Fit Design Calculator", layout="wide", page_icon="🔧")
 
 # --- Constants and Configuration ---
-# IMPORTANT: Make sure this Excel file is in the same directory as your script
 EXCEL_FILE = "Snap Fit  calculation.xlsm"
 SHEET_MAP = {
     "Cantilever Snap": "Cantilever Snap",
@@ -38,38 +37,29 @@ def load_and_format_material_ref(sheet_name="Material Prop Ref."):
         raw.columns = raw.iloc[0].astype(str).str.strip()
         df = raw[1:].reset_index(drop=True)
         df.columns = df.columns.map(str).str.strip()
+        # Convert all data to strings to prevent type errors
         return df.astype(str)
     except Exception as e:
         st.warning(f"Could not load material reference sheet: {e}")
         return pd.DataFrame()
 
-# --- Core Calculation Functions (The "Missing Logic") ---
+# --- Core Calculation Functions ---
 def calculate_cantilever_snap(E_gpa, t, L, b, y, mu, alpha_deg, alpha_prime_deg, q):
     """Performs all calculations for a Cantilever Snap Fit."""
     if L == 0 or t == 0 or b == 0:
         return {"error": "Beam dimensions (L, t, b) cannot be zero."}
 
-    # Convert units: E from GPa to MPa, angles from degrees to radians
     E_mpa = E_gpa * 1000
     alpha_rad = math.radians(alpha_deg)
     alpha_prime_rad = math.radians(alpha_prime_deg)
 
-    # 1. Max Strain (%)
     strain = (3 * y * t) / (2 * L**2) * q
     strain_percent = strain * 100
-
-    # 2. Deflection Force (P) in Newtons
-    deflection_force = (E_mpa * b * y) / q * ((t / L)**3) / 4 # Corrected formula
-
-    # 3. Push-on Force (W)
-    # Using the formula W = P * (μ + tan(α)) / (1 - μ * tan(α))
+    deflection_force = (E_mpa * b * y) / q * ((t / L)**3) / 4
     tan_alpha = math.tan(alpha_rad)
     push_on_force = deflection_force * (mu + tan_alpha) / (1 - mu * tan_alpha) if (1 - mu * tan_alpha) != 0 else float('inf')
-
-    # 4. Pull-off Force (W')
     tan_alpha_prime = math.tan(alpha_prime_rad)
-    pull_off_force = deflection_force * (math.tan(alpha_prime_rad) - mu) / (1 + mu * math.tan(alpha_prime_rad)) if (1 + mu * tan_alpha_prime) != 0 else float('inf')
-
+    pull_off_force = deflection_force * (tan_alpha_prime - mu) / (1 + mu * tan_alpha_prime) if (1 + mu * tan_alpha_prime) != 0 else float('inf')
 
     return {
         "Max Strain": strain_percent,
@@ -79,23 +69,18 @@ def calculate_cantilever_snap(E_gpa, t, L, b, y, mu, alpha_deg, alpha_prime_deg,
         "error": None
     }
 
-
 # --- UI and Application Flow ---
-
-# Load data early to handle potential errors
-df_sheet = load_sheet(list(SHEET_MAP.values())[0]) # Load default sheet initially
+df_sheet = load_sheet(list(SHEET_MAP.values())[0])
 if df_sheet is None:
-    st.stop() # Stop execution if the Excel file is missing
+    st.stop()
 
 material_ref_df = load_and_format_material_ref()
 
-# --- Sidebar ---
 st.sidebar.title("📂 Snap Fit Selector")
 snap_type = st.sidebar.selectbox("Select Snap Fit Type", list(SHEET_MAP.keys()))
 sheet_name = SHEET_MAP[snap_type]
 df = load_sheet(sheet_name)
 
-# Sidebar images
 st.sidebar.markdown("---")
 snap_images = {
     "Cantilever Snap": ["Q factor selection.png", "Beam Type.png", "Beam.png"],
@@ -108,18 +93,14 @@ for img_file in snap_images.get(snap_type, []):
     else:
         st.sidebar.warning(f"Image not found: {img_file}")
 
-# --- Main Page ---
 st.title(f"🧩 {snap_type} Design Calculator")
 
-# --- Input Form ---
 def extract_input_value(df, label):
-    """Extracts default values from the loaded Excel sheet."""
     try:
         return float(df[df[1] == label].iloc[0, 4])
     except (ValueError, IndexError, TypeError):
         return 0.0
 
-# Define inputs based on the snap type
 inputs = {}
 if snap_type == "Cantilever Snap":
     inputs = {
@@ -134,8 +115,6 @@ if snap_type == "Cantilever Snap":
         "Deflection Y (mm)": extract_input_value(df, "Deflection"),
         "Q Factor": extract_input_value(df, "Q Factor")
     }
-# (Add similar blocks for "L Shaped Snap" and "U Shaped Snap" if their inputs differ)
-
 
 col_form, col_ref = st.columns([2, 1])
 
@@ -148,18 +127,17 @@ with col_form:
 with col_ref:
     st.header("📚 Material Reference")
     if not material_ref_df.empty:
-        st.dataframe(material_ref_df, use_container_width=True)
+        # ** THIS IS THE FIX **
+        # Using st.table() is more robust for data from Excel.
+        st.table(material_ref_df)
     else:
         st.info("Material reference data is not available.")
 
-
-# --- Output Results ---
 if submitted:
     st.markdown("---")
     st.subheader("📄 Output Results")
 
     if snap_type == "Cantilever Snap":
-        # Unpack user inputs for calculation
         calc_inputs = {
             "E_gpa": user_inputs["Flexural Modulus E (GPa)"],
             "t": user_inputs["Beam Thickness t (mm)"],
@@ -178,8 +156,6 @@ if submitted:
             st.error(results["error"])
         else:
             permissible_strain = user_inputs["Permissible Strain ε (%)"]
-            
-            # Display metrics and validation
             col1, col2 = st.columns(2)
             is_safe = results["Max Strain"] < permissible_strain
             
@@ -197,7 +173,6 @@ if submitted:
                 else:
                     st.error("❌ **Design WILL LIKELY FAIL**")
 
-            # Display forces in a table
             force_data = {
                 "Metric": ["Deflection Force (P)", "Push-on Force (W)", "Pull-off Force (W')"],
                 "Force (N)": [
@@ -208,14 +183,8 @@ if submitted:
             }
             st.table(pd.DataFrame(force_data))
 
-    # Add elif blocks for "L Shaped Snap" and "U Shaped Snap" with their specific calculations and outputs
-    elif snap_type == "L Shaped Snap":
-        st.info("Calculation logic for L-Shaped snaps is not yet implemented.")
-    
-    elif snap_type == "U Shaped Snap":
-        st.info("Calculation logic for U-Shaped snaps is not yet implemented.")
+    elif snap_type in ["L Shaped Snap", "U Shaped Snap"]:
+        st.info(f"Calculation logic for {snap_type} is not yet implemented.")
 
-
-# --- Footer ---
 st.markdown("---")
 st.caption("📘 Snap Fit Engineering Tool · Powered by Python & Streamlit")
